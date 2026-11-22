@@ -1,3 +1,4 @@
+
 name: Portafolio CI/CD
 
 on:
@@ -54,7 +55,7 @@ jobs:
         run: python -m pip install -r backend/requirements.txt
       - name: Pruebas unitarias e integración backend
         working-directory: backend
-        run: pytest -m "unit or integration" -v
+        run: PYTHONPATH=. pytest -m "unit or integration" -v
       - name: Instalar navegador para Playwright
         working-directory: frontend
         run: npx playwright install --with-deps chromium
