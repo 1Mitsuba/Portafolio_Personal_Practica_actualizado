@@ -1,0 +1,127 @@
+---
+- name: Configurar VM OCI y desplegar el portafolio
+  hosts: all
+  become: true
+  vars:
+    deploy_dir: /opt/portfolio
+    admin_cidr: "{{ lookup('env', 'OCI_ADMIN_CIDR') }}"
+    runner_cidr: "{{ lookup('env', 'RUNNER_CIDR') }}"
+    site_domain: "{{ lookup('env', 'PORTFOLIO_DOMAIN') }}"
+    dockerhub_username: "{{ lookup('env', 'DOCKERHUB_USERNAME') }}"
+    image_tag: "{{ lookup('env', 'IMAGE_TAG') }}"
+    database_url: "{{ lookup('env', 'SUPABASE_DATABASE_URL') }}"
+
+  tasks:
+    - name: Esperar a que Ubuntu responda por SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
+
+    - name: Actualizar caché e instalar Docker, Git y herramientas de firewall
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        name:
+          - docker.io
+          - docker-compose-v2
+          - git
+          - ufw
+          - iptables
+        state: present
+
+    - name: Habilitar Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Permitir SSH desde la IP administradora
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        from_ip: "{{ admin_cidr }}"
+
+    - name: Permitir SSH desde el runner del despliegue actual
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        from_ip: "{{ runner_cidr }}"
+
+    - name: Permitir HTTP y HTTPS
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["80", "443"]
+
+    - name: Denegar conexiones entrantes por defecto
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Permitir conexiones salientes por defecto
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Activar UFW
+      community.general.ufw:
+        state: enabled
+
+    - name: Crear carpeta de despliegue
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0750"
+
+    - name: Copiar Compose de producción
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../docker-compose.yml"
+        dest: "{{ deploy_dir }}/docker-compose.yml"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0640"
+
+    - name: Copiar configuración Caddy
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../docker/Caddyfile"
+        dest: "{{ deploy_dir }}/Caddyfile"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0640"
+
+    - name: Crear archivo de entorno de producción
+      ansible.builtin.template:
+        src: templates/portfolio.env.j2
+        dest: "{{ deploy_dir }}/.env"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+      no_log: true
+
+    - name: Descargar las imágenes de esta versión
+      become_user: ubuntu
+      ansible.builtin.command:
+        cmd: docker compose --profile production pull
+        chdir: "{{ deploy_dir }}"
+      changed_when: true
+
+    - name: Levantar o actualizar el portafolio
+      become_user: ubuntu
+      ansible.builtin.command:
+        cmd: docker compose --profile production up -d --remove-orphans
+        chdir: "{{ deploy_dir }}"
+      changed_when: true
+
+    - name: Verificar reglas activas de iptables
+      ansible.builtin.command: iptables -S
+      register: firewall_rules
+      changed_when: false
+
+    - name: Mostrar reglas de puertos requeridos
+      ansible.builtin.debug:
+        msg: "UFW activo; verificar además las reglas OCI. Salida iptables: {{ firewall_rules.stdout_lines }}"

@@ -1,0 +1,183 @@
+name: Portafolio CI/CD
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Pruebas unitarias, integración y E2E
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: portfolio_test
+          POSTGRES_USER: portfolio
+          POSTGRES_PASSWORD: portfolio
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U portfolio -d portfolio_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://portfolio:portfolio@localhost:5432/portfolio_test
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Instalar dependencias frontend
+        working-directory: frontend
+        run: npm install --no-audit --no-fund
+      - name: Pruebas unitarias frontend
+        working-directory: frontend
+        run: npm run test:unit
+      - name: Compilar frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias backend
+        run: python -m pip install -r backend/requirements.txt
+      - name: Pruebas unitarias e integración backend
+        working-directory: backend
+        run: pytest -m "unit or integration" -v
+      - name: Instalar navegador para Playwright
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Levantar aplicación completa para E2E
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up --build -d
+      - name: Esperar a que la aplicación esté disponible
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/api/health; then exit 0; fi
+            sleep 5
+          done
+          docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local logs
+          exit 1
+      - name: Ejecutar pruebas E2E
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Mostrar logs si falla el pipeline
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local logs
+      - name: Limpiar contenedores de prueba
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local down -v
+
+  publish-and-deploy:
+    name: Publicar imágenes y desplegar en OCI
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+      - name: Detectar IP temporal del runner para SSH
+        id: runner-ip
+        run: |
+          ip=$(curl -fsS https://api.ipify.org)
+          echo "::add-mask::$ip"
+          echo "cidr=$ip/32" >> "$GITHUB_OUTPUT"
+          echo "RUNNER_CIDR=$ip/32" >> "$GITHUB_ENV"
+      - name: Iniciar sesión en Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Construir y publicar frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.frontend
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-frontend:sha-${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-frontend:latest
+      - name: Construir y publicar backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.backend
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-api:sha-${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-api:latest
+      - name: Preparar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+      - name: Inicializar y aplicar infraestructura y DNS
+        id: terraform
+        working-directory: terraform
+        env:
+          TF_VAR_oci_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          TF_VAR_oci_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          TF_VAR_oci_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          TF_VAR_oci_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
+          TF_VAR_oci_region: ${{ vars.OCI_REGION }}
+          TF_VAR_oci_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          TF_VAR_oci_image_ocid: ${{ vars.OCI_IMAGE_OCID }}
+          TF_VAR_oci_ssh_public_key: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+          TF_VAR_oci_admin_cidr: ${{ vars.OCI_ADMIN_CIDR }}
+          TF_VAR_deployment_runner_cidr: ${{ steps.runner-ip.outputs.cidr }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_domain: ${{ vars.PORTFOLIO_DOMAIN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          terraform init -input=false -backend-config="organization=${{ secrets.HCP_TFC_ORGANIZATION }}"
+          terraform validate
+          terraform apply -input=false -auto-approve
+          echo "public_ip=$(terraform output -raw public_ip)" >> "$GITHUB_OUTPUT"
+      - name: Preparar Ansible
+        run: |
+          python -m pip install ansible==10.7.0
+          ansible-galaxy collection install community.general
+          install -m 600 /dev/null "$RUNNER_TEMP/portfolio_ssh_key"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/portfolio_ssh_key"
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Configurar VM y desplegar contenedores
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_PRIVATE_KEY_FILE: ${{ runner.temp }}/portfolio_ssh_key
+          OCI_ADMIN_CIDR: ${{ vars.OCI_ADMIN_CIDR }}
+          RUNNER_CIDR: ${{ steps.runner-ip.outputs.cidr }}
+          PORTFOLIO_DOMAIN: ${{ vars.PORTFOLIO_DOMAIN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: sha-${{ github.sha }}
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: >-
+          ansible-playbook
+          -i '${{ steps.terraform.outputs.public_ip }},'
+          -u ubuntu
+          ansible/playbook.yml
+          --private-key "$ANSIBLE_PRIVATE_KEY_FILE"
+      - name: Comprobar URL pública
+        env:
+          PORTFOLIO_DOMAIN: ${{ vars.PORTFOLIO_DOMAIN }}
+        run: |
+          for attempt in {1..36}; do
+            if curl --fail --silent "https://${PORTFOLIO_DOMAIN}/api/health"; then exit 0; fi
+            sleep 10
+          done
+          echo "La URL no respondió correctamente después del despliegue."
+          exit 1
