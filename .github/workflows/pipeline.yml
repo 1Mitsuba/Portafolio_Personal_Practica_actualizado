@@ -14,7 +14,7 @@ permissions:
 jobs:
   verify:
     name: Pruebas unitarias, integración y E2E
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -83,7 +83,7 @@ jobs:
     name: Publicar imágenes y desplegar en OCI
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     steps:
       - name: Descargar código
