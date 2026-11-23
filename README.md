@@ -1,135 +1,110 @@
 # Portafolio personal — Wendy Ramírez
 
-Portafolio sencillo con Vue 3, TypeScript, Vite, FastAPI y PostgreSQL de Supabase. Incluye pruebas unitarias, de integración y E2E; Docker Compose; Terraform para OCI y Cloudflare; y Ansible para configurar y desplegar la VM.
+Aplicación sencilla con Vue 3, TypeScript, Vite, FastAPI y Supabase PostgreSQL. Incluye pruebas unitarias, de integración y E2E, Docker Compose, Terraform, Ansible y despliegue de Cloudflare Workers en una URL gratuita workers.dev.
 
 ## Ejecución local
 
 Requisitos: Docker Desktop y Git.
 
-1. Copiar `.env.example` como `.env` (`Copy-Item .env.example .env` en PowerShell).
-2. Ejecutar `docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up --build`.
-3. Abrir <http://localhost:8080>.
+1. Copiar .env.example como .env (PowerShell: Copy-Item .env.example .env).
+2. Ejecutar: docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up --build.
+3. Abrir http://localhost:8080.
 
-El perfil local usa PostgreSQL en Docker. Para usar tu proyecto Supabase, coloca en `DATABASE_URL` la cadena de conexión **Session pooler** de Supabase. No pongas claves de servicio en variables `VITE_*`, porque esas variables se envían al navegador.
+El perfil local usa PostgreSQL en Docker. Para usar Supabase, configura DATABASE_URL con la cadena de conexión Session pooler. No pongas claves secretas en variables VITE_*.
 
 ## Pruebas
 
-```powershell
-cd frontend
-  npm install
-npm run test:unit
-```
+Frontend unitario y E2E:
 
-```powershell
-cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\Activate.ps1
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-pytest -m unit
-```
-
-Las pruebas de integración usan la base PostgreSQL de CI o la base local del Compose. Las E2E requieren la aplicación levantada con Compose:
-
-```powershell
+~~~powershell
 cd frontend
 npm install
-npx playwright install chromium
+npm run test:unit
 npm run test:e2e
-```
+~~~
 
-## Flujo de ramas
+Backend unitario e integración:
 
-- Cada push a `dev` instala dependencias y ejecuta unit, integración y E2E.
-- Cada push a `main` ejecuta las mismas comprobaciones, publica las imágenes del frontend y API en Docker Hub, aplica Terraform y ejecuta Ansible para desplegar.
+~~~powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pytest -m "unit or integration"
+~~~
 
-## Preparación de servicios
+Las pruebas E2E usan Playwright y requieren la aplicación levantada por Docker Compose. GitHub Actions ejecuta las pruebas en cada push a dev y en cada pull request hacia main.
 
-### GitHub
+## Flujo de GitHub Actions
 
-Crear las ramas `dev` y `main`, y cargar estos **Repository secrets** (nunca subir valores al repositorio):
+- Push a dev: compila y ejecuta unitarias, integración y E2E.
+- Push a main: repite las pruebas; publica frontend y API ARM64 en Docker Hub; prepara el estado remoto en OCI Object Storage; crea VM, VCN, subred pública e IP pública con Terraform; configura Docker, Git, UFW e iptables con Ansible; despliega el sitio a workers.dev.
+- La URL final se imprime en el resumen de la ejecución de Actions.
 
-| Secreto | Contenido |
+## Preparar GitHub
+
+En Settings → Secrets and variables → Actions, configura estos valores. No los pongas en el código ni los envíes por chat.
+
+### Repository secrets
+
+| Secreto | Uso |
 |---|---|
-| `DOCKERHUB_USERNAME` | Usuario de Docker Hub, por ejemplo `1mitsuba` |
-| `DOCKERHUB_TOKEN` | Access token de Docker Hub con permiso de escritura |
-| `TF_API_TOKEN` | Token de HCP Terraform |
-| `HCP_TFC_ORGANIZATION` | Nombre exacto de la organización HCP Terraform |
-| `OCI_TENANCY_OCID` | OCID de la tenancy |
-| `OCI_USER_OCID` | OCID del usuario OCI |
-| `OCI_FINGERPRINT` | Fingerprint de la clave API OCI |
-| `OCI_COMPARTMENT_OCID` | OCID del compartimento donde se crearán los recursos |
-| `OCI_PRIVATE_KEY` | Contenido PEM de la clave privada API OCI |
-| `OCI_SSH_PUBLIC_KEY` | Clave pública autorizada para SSH a Ubuntu |
-| `SSH_PRIVATE_KEY` | Clave privada correspondiente a `OCI_SSH_PUBLIC_KEY` |
-| `CLOUDFLARE_API_TOKEN` | Token restringido a la zona, con Zone:Read y DNS:Edit |
-| `CLOUDFLARE_ZONE_ID` | Zone ID del dominio |
-| `SUPABASE_DATABASE_URL` | Connection string Session pooler de Supabase |
+| DOCKERHUB_USERNAME | Usuario de Docker Hub |
+| DOCKERHUB_TOKEN | Token Docker Hub con escritura |
+| CLOUDFLARE_API_TOKEN | Token de Workers Scripts Edit y Account Settings Read |
+| OCI_TENANCY_OCID | OCID de la tenancy OCI |
+| OCI_USER_OCID | OCID del usuario OCI |
+| OCI_FINGERPRINT | Fingerprint de la clave de API OCI |
+| OCI_PRIVATE_KEY | Clave privada PEM para la API OCI |
+| OCI_COMPARTMENT_OCID | OCID del compartment de destino |
+| OCI_SSH_PUBLIC_KEY | Clave pública para entrar a la VM |
+| SSH_PRIVATE_KEY | Clave privada SSH correspondiente |
+| OCI_OBJECT_STORAGE_ACCESS_KEY | Access key S3 de OCI Customer Secret Key |
+| OCI_OBJECT_STORAGE_SECRET_KEY | Secret key S3 de OCI Customer Secret Key |
+| SUPABASE_DATABASE_URL | URI Session pooler de Supabase |
 
-Agregar estas **Repository variables**:
+CLOUDFLARE_API_TOKEN ya está guardado en el repositorio. El token creado vence aproximadamente 90 días después de su creación. No compartas aquí su valor.
 
-| Variable | Ejemplo |
+### Repository variables
+
+| Variable | Contenido |
 |---|---|
-| `PORTFOLIO_DOMAIN` | `portfolio.tudominio.com` |
-| `OCI_REGION` | Región habilitada en tu tenancy, por ejemplo `sa-santiago-1` |
-| `OCI_IMAGE_OCID` | OCID de una imagen Ubuntu 24.04 x86_64 de `sa-santiago-1` |
-| `OCI_ADMIN_CIDR` | Tu IP pública con `/32`, para restringir SSH |
+| CLOUDFLARE_ACCOUNT_ID | ID de la cuenta Cloudflare |
+| OCI_REGION | Región OCI habilitada, por ejemplo sa-santiago-1 |
+| OCI_IMAGE_OCID | OCID de Ubuntu 24.04 ARM64/AArch64 en esa región |
+| OCI_ADMIN_CIDR | Tu IP pública con /32 para restringir SSH |
+| OCI_NAMESPACE | Namespace de Object Storage de OCI |
+| TF_STATE_BUCKET | Nombre del bucket privado del estado, por ejemplo portfolio-tfstate |
 
-El dominio debe estar agregado a Cloudflare y usar sus nameservers antes del primer despliegue. Crear previamente los repositorios públicos `portfolio-frontend` y `portfolio-api` dentro de la cuenta Docker Hub para que el runner pueda publicar.
+CLOUDFLARE_ACCOUNT_ID ya está guardada como variable.
 
-### HCP Terraform (estado remoto)
+## Supabase
 
-Crear una organización y un workspace llamado `portfolio-personal`. En el workspace seleccionar **Local execution mode**: Terraform se ejecuta en el runner de GitHub Actions, pero el estado queda guardado remotamente en HCP Terraform. Crear un token de usuario y guardarlo como `TF_API_TOKEN`. El nombre de organización debe coincidir con `HCP_TFC_ORGANIZATION`.
+1. En tu proyecto Supabase, abre SQL Editor y ejecuta database/schema.sql.
+2. Copia la cadena Session pooler de conexión PostgreSQL y guárdala en GitHub como SUPABASE_DATABASE_URL.
+3. No es necesario que compartas conmigo esa cadena. El flujo local no modifica tu proyecto Supabase.
 
-### OCI
+## OCI y estado remoto
 
-Usaremos inicialmente `VM.Standard.E4.Flex` con **1 OCPU, 2 GB RAM y 50 GB de boot volume**, sujeto a que la shape esté habilitada en tu tenancy de Santiago. La lista pública de Oracle LatAm da una referencia de aproximadamente **US$26.80/mes para cómputo** si permanece activa 730 horas (1 OCPU + 2 GB); faltan almacenamiento, tráfico, IP e impuestos. Confirma el total en OCI Cost Estimator antes del primer `main`. Terraform no crea recursos hasta que se ejecute ese workflow.
+El backend remoto usa un bucket privado de OCI Object Storage con su API compatible con S3. Así no depende de crear una organización HCP Terraform, que alcanzó el límite de cuenta.
 
-Crear una clave de API OCI y guardar su clave privada y fingerprint como secretos. Crear o seleccionar una imagen **Canonical Ubuntu 24.04 x86_64/AMD64** compatible con E4 y guardar su OCID en `OCI_IMAGE_OCID`. La VM necesita salida a Internet para instalar paquetes y descargar imágenes Docker.
+1. En OCI, crea un bucket privado para el estado antes de correr Terraform. No lo hagas público ni lo elimines mientras haya recursos Terraform asociados.
+2. En OCI, genera una Customer Secret Key de Object Storage compatible con S3. Guarda su Access Key ID y Secret Key como los dos secretos indicados arriba.
+3. Anota el namespace de Object Storage y configura OCI_NAMESPACE. El bucket debe estar en la misma región de OCI_REGION.
+4. Crea una clave API OCI y guarda la clave privada, fingerprint, tenancy OCID y user OCID como secrets. Obtén el compartment OCID donde crearás la red y la VM.
+5. Crea una clave SSH y guarda ambas partes en los secrets correspondientes. Configura OCI_ADMIN_CIDR con tu IP confiable.
+6. Selecciona el OCID de una imagen Ubuntu Server 24.04 ARM64/AArch64 y agrégalo como OCI_IMAGE_OCID.
 
-Al ejecutar `npm install` por primera vez se generará `frontend/package-lock.json`; guarda ese archivo en Git para fijar versiones de dependencias. `terraform init` generará `terraform/.terraform.lock.hcl`; también debe versionarse.
+Terraform crea una instancia VM.Standard.A1.Flex de 1 OCPU, 2 GB y disco de arranque de 50 GB, además de VCN, internet gateway, subnet pública, rutas, reglas de red e IP pública. SSH se restringe a tu CIDR y al runner durante el despliegue; la red pública abre 80 y 443. Ansible instala Docker, Git, UFW e iptables, permite los puertos 80/443 y publica los contenedores.
 
-### Subir el proyecto a tu GitHub
+### Costo orientativo
 
-Después de extraer el ZIP, crea un repositorio vacío en tu cuenta y usa su URL al configurar el remoto:
+La tarifa pública de Oracle para Ampere A1 es US$0.01 por OCPU-hora y US$0.0015 por GB-hora; 1 OCPU y 2 GB durante 730 horas representa cerca de US$9.50 al mes solo en cómputo. OCI publica una asignación mensual sin costo para ciertas cantidades A1, pero disponibilidad, elegibilidad, disco, tráfico y otros cargos dependen de tu tenancy y región. Verifica el total en el estimador de OCI antes de ejecutar el primer despliegue a main. El workflow hace terraform apply con aprobación automática, por eso un push a main puede crear recursos facturables.
 
-```bash
-git init -b main
-git add .
-git commit -m "Crear portafolio personal"
-git remote add origin URL_DE_TU_REPOSITORIO
-git push -u origin main
-git switch -c dev
-git push -u origin dev
-```
+## Cloudflare Workers
 
-Los pushes a `dev` ejecutarán CI. Al hacer el primer push a `main`, el pipeline intentará crear recursos de pago en OCI, así que primero completa y revisa todos los secretos y variables indicados.
+El repositorio publica Vue mediante Wrangler a https://portafolio-wendy.<tu-subdominio>.workers.dev y redirige las rutas /api a la IP pública de OCI por HTTP. El navegador se conecta por HTTPS al Worker. No necesitas comprar dominio ni añadir una zona DNS. Activa una vez el subdominio gratuito workers.dev en Workers & Pages de Cloudflare antes del primer despliegue.
 
-### Supabase
+## Antes del primer push a main
 
-Crear la tabla ejecutando `database/schema.sql` en el SQL Editor de tu proyecto. Copiar la connection string de **Session pooler** a `SUPABASE_DATABASE_URL`. No hace falta compartir aquí el token ni el URI.
-
-### Cloudflare
-
-Agregar el dominio y completar la delegación de nameservers en el registrador. Crear un token API de zona con permisos mínimos **Zone:Read** y **DNS:Edit**. Terraform creará un A record proxied para el host elegido. El certificado del origen se gestiona con Caddy y HTTPS-01; Cloudflare se configura en modo **Full (strict)** después de que el primer certificado esté emitido.
-
-## Diseño de red y seguridad
-
-- VCN con subnet pública e Internet Gateway.
-- Ingress: TCP 80/443 desde Internet; SSH TCP 22 solo desde `OCI_ADMIN_CIDR`.
-- API y PostgreSQL no publican puertos en la VM; el backend habla con Supabase por TLS.
-- Ansible configura UFW y comprueba las reglas efectivas de `iptables`.
-- Docker Hub publica tags `sha-<commit>` e `latest`; el servidor despliega el tag inmutable del commit.
-- Terraform conserva su estado en HCP Terraform. No guardar `terraform.tfstate`, claves ni `.env` en Git.
-
-## Estructura
-
-```text
-frontend/       Vue, TypeScript, Vitest y Playwright
-backend/        FastAPI, pytest y conexión PostgreSQL
-database/       Esquema SQL para Supabase/PostgreSQL
-docker/         Dockerfiles, Nginx y Caddy
-terraform/      OCI, red, VM y DNS Cloudflare
-ansible/        Instalación segura y despliegue
-.github/        Pipeline de GitHub Actions
-```
+Completa los secretos y variables anteriores, crea el bucket de estado y ejecuta database/schema.sql en Supabase. Al fusionar la PR a main, se activará el despliegue de Docker Hub, OCI, Ansible y Cloudflare Workers; el costo depende de la región y los recursos disponibles.
