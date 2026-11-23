@@ -110,12 +110,10 @@ jobs:
           OCI_ADMIN_CIDR: ${{ vars.OCI_ADMIN_CIDR }}
           OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          OCI_OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_ACCESS_KEY }}
-          OCI_OBJECT_STORAGE_SECRET_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ] || [ -z "$OCI_TENANCY_OCID" ] || [ -z "$OCI_USER_OCID" ] || [ -z "$OCI_FINGERPRINT" ] || [ -z "$OCI_PRIVATE_KEY" ] || [ -z "$OCI_COMPARTMENT_OCID" ] || [ -z "$OCI_SSH_PUBLIC_KEY" ] || [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$SUPABASE_DATABASE_URL" ] || [ -z "$OCI_REGION" ] || [ -z "$OCI_IMAGE_OCID" ] || [ -z "$OCI_ADMIN_CIDR" ] || [ -z "$OCI_NAMESPACE" ] || [ -z "$TF_STATE_BUCKET" ] || [ -z "$OCI_OBJECT_STORAGE_ACCESS_KEY" ] || [ -z "$OCI_OBJECT_STORAGE_SECRET_KEY" ] || [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ] || [ -z "$OCI_TENANCY_OCID" ] || [ -z "$OCI_USER_OCID" ] || [ -z "$OCI_FINGERPRINT" ] || [ -z "$OCI_PRIVATE_KEY" ] || [ -z "$OCI_COMPARTMENT_OCID" ] || [ -z "$OCI_SSH_PUBLIC_KEY" ] || [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$SUPABASE_DATABASE_URL" ] || [ -z "$OCI_REGION" ] || [ -z "$OCI_IMAGE_OCID" ] || [ -z "$OCI_ADMIN_CIDR" ] || [ -z "$OCI_NAMESPACE" ] || [ -z "$TF_STATE_BUCKET" ] || [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "::error::Completa los secretos y variables de GitHub indicados en README antes del despliegue."
             exit 1
           fi
@@ -151,14 +149,16 @@ jobs:
       - name: Preparar Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.10.5
+          terraform_version: 1.12.2
       - name: Inicializar y aplicar infraestructura OCI
         id: terraform
         working-directory: terraform
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.OCI_OBJECT_STORAGE_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_KEY }}
-          AWS_DEFAULT_REGION: ${{ vars.OCI_REGION }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_REGION: ${{ vars.OCI_REGION }}
           TF_VAR_oci_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
           TF_VAR_oci_user_ocid: ${{ secrets.OCI_USER_OCID }}
           TF_VAR_oci_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
@@ -170,17 +170,17 @@ jobs:
           TF_VAR_oci_admin_cidr: ${{ vars.OCI_ADMIN_CIDR }}
           TF_VAR_deployment_runner_cidr: ${{ steps.runner-ip.outputs.cidr }}
         run: |
+          install -d -m 700 "$HOME/.oci"
+          install -m 600 /dev/null "$RUNNER_TEMP/oci_api_key.pem"
+          printf '%s\n' "$OCI_PRIVATE_KEY" > "$RUNNER_TEMP/oci_api_key.pem"
+          printf '[DEFAULT]\nuser=%s\ntenancy=%s\nregion=%s\nfingerprint=%s\nkey_file=%s\n' \
+            "$OCI_USER_OCID" "$OCI_TENANCY_OCID" "$OCI_REGION" "$OCI_FINGERPRINT" "$RUNNER_TEMP/oci_api_key.pem" > "$HOME/.oci/config"
+          chmod 600 "$HOME/.oci/config"
           terraform init -input=false \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="namespace=${{ vars.OCI_NAMESPACE }}" \
             -backend-config="key=portafolio/terraform.tfstate" \
-            -backend-config="region=${{ vars.OCI_REGION }}" \
-            -backend-config="endpoint=https://${{ vars.OCI_NAMESPACE }}.compat.objectstorage.${{ vars.OCI_REGION }}.oraclecloud.com" \
-            -backend-config="force_path_style=true" \
-            -backend-config="skip_region_validation=true" \
-            -backend-config="skip_credentials_validation=true" \
-            -backend-config="skip_metadata_api_check=true" \
-            -backend-config="skip_requesting_account_id=true" \
-            -backend-config="use_lockfile=true"
+            -backend-config="region=${{ vars.OCI_REGION }}"
           terraform validate
           terraform apply -input=false -auto-approve
           echo "public_ip=$(terraform output -raw public_ip)" >> "$GITHUB_OUTPUT"
