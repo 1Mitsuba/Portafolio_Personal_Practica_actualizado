@@ -35,15 +35,6 @@ variable "deployment_runner_cidr" {
   type        = string
   description = "CIDR temporal del runner GitHub que ejecuta Ansible."
 }
-variable "cloudflare_zone_id" {
-  type      = string
-  sensitive = true
-}
-variable "cloudflare_domain" {
-  type        = string
-  description = "Nombre completo DNS, por ejemplo portfolio.ejemplo.com."
-}
-
 variable "vcn_cidr" {
   type    = string
   default = "10.20.0.0/16"
