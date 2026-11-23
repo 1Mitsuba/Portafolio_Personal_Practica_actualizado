@@ -1,4 +1,3 @@
-
 name: Portafolio CI/CD
 
 on:
@@ -80,7 +79,7 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local down -v
 
   publish-and-deploy:
-    name: Publicar imágenes y desplegar en OCI
+    name: Docker Hub, OCI, Ansible y Cloudflare Workers
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-24.04
@@ -94,7 +93,32 @@ jobs:
           ip=$(curl -fsS https://api.ipify.org)
           echo "::add-mask::$ip"
           echo "cidr=$ip/32" >> "$GITHUB_OUTPUT"
-          echo "RUNNER_CIDR=$ip/32" >> "$GITHUB_ENV"
+      - name: Validar configuración requerida
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_SSH_PUBLIC_KEY: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          OCI_REGION: ${{ vars.OCI_REGION }}
+          OCI_IMAGE_OCID: ${{ vars.OCI_IMAGE_OCID }}
+          OCI_ADMIN_CIDR: ${{ vars.OCI_ADMIN_CIDR }}
+          OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          OCI_OBJECT_STORAGE_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_ACCESS_KEY }}
+          OCI_OBJECT_STORAGE_SECRET_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ] || [ -z "$OCI_TENANCY_OCID" ] || [ -z "$OCI_USER_OCID" ] || [ -z "$OCI_FINGERPRINT" ] || [ -z "$OCI_PRIVATE_KEY" ] || [ -z "$OCI_COMPARTMENT_OCID" ] || [ -z "$OCI_SSH_PUBLIC_KEY" ] || [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$SUPABASE_DATABASE_URL" ] || [ -z "$OCI_REGION" ] || [ -z "$OCI_IMAGE_OCID" ] || [ -z "$OCI_ADMIN_CIDR" ] || [ -z "$OCI_NAMESPACE" ] || [ -z "$TF_STATE_BUCKET" ] || [ -z "$OCI_OBJECT_STORAGE_ACCESS_KEY" ] || [ -z "$OCI_OBJECT_STORAGE_SECRET_KEY" ] || [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Completa los secretos y variables de GitHub indicados en README antes del despliegue."
+            exit 1
+          fi
       - name: Iniciar sesión en Docker Hub
         uses: docker/login-action@v3
         with:
@@ -126,11 +150,13 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.5
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
-      - name: Inicializar y aplicar infraestructura y DNS
+      - name: Inicializar y aplicar infraestructura OCI
         id: terraform
         working-directory: terraform
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OCI_OBJECT_STORAGE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.OCI_REGION }}
           TF_VAR_oci_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
           TF_VAR_oci_user_ocid: ${{ secrets.OCI_USER_OCID }}
           TF_VAR_oci_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
@@ -141,11 +167,18 @@ jobs:
           TF_VAR_oci_ssh_public_key: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
           TF_VAR_oci_admin_cidr: ${{ vars.OCI_ADMIN_CIDR }}
           TF_VAR_deployment_runner_cidr: ${{ steps.runner-ip.outputs.cidr }}
-          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          TF_VAR_cloudflare_domain: ${{ vars.PORTFOLIO_DOMAIN }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          terraform init -input=false -backend-config="organization=${{ secrets.HCP_TFC_ORGANIZATION }}"
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=portafolio/terraform.tfstate" \
+            -backend-config="region=${{ vars.OCI_REGION }}" \
+            -backend-config="endpoint=https://${{ vars.OCI_NAMESPACE }}.compat.objectstorage.${{ vars.OCI_REGION }}.oraclecloud.com" \
+            -backend-config="force_path_style=true" \
+            -backend-config="skip_region_validation=true" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true" \
+            -backend-config="skip_requesting_account_id=true" \
+            -backend-config="use_lockfile=true"
           terraform validate
           terraform apply -input=false -auto-approve
           echo "public_ip=$(terraform output -raw public_ip)" >> "$GITHUB_OUTPUT"
@@ -163,7 +196,7 @@ jobs:
           ANSIBLE_PRIVATE_KEY_FILE: ${{ runner.temp }}/portfolio_ssh_key
           OCI_ADMIN_CIDR: ${{ vars.OCI_ADMIN_CIDR }}
           RUNNER_CIDR: ${{ steps.runner-ip.outputs.cidr }}
-          PORTFOLIO_DOMAIN: ${{ vars.PORTFOLIO_DOMAIN }}
+          PORTFOLIO_DOMAIN: ":80"
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_TAG: sha-${{ github.sha }}
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
@@ -173,51 +206,26 @@ jobs:
           -u ubuntu
           ansible/playbook.yml
           --private-key "$ANSIBLE_PRIVATE_KEY_FILE"
-      - name: Comprobar URL pública
+      - name: Construir y publicar Cloudflare Worker en workers.dev
+        working-directory: frontend
         env:
-          PORTFOLIO_DOMAIN: ${{ vars.PORTFOLIO_DOMAIN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          API_ORIGIN: http://${{ steps.terraform.outputs.public_ip }}
         run: |
+          npm install --no-audit --no-fund
+          npm run build
+          cd ..
+          npx --yes wrangler@4.52.1 deploy --config wrangler.jsonc --var "API_ORIGIN:$API_ORIGIN"
+          subdomain=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty')
+          test -n "$subdomain" || { echo "::error::Configura el subdominio gratuito workers.dev de Cloudflare."; exit 1; }
+          url="https://portafolio-wendy.$subdomain.workers.dev"
+          echo "URL publicada: $url"
+          echo "### Portafolio publicado" >> "$GITHUB_STEP_SUMMARY"
+          echo "$url" >> "$GITHUB_STEP_SUMMARY"
           for attempt in {1..36}; do
-            if curl --fail --silent "https://$PORTFOLIO_DOMAIN/api/health"; then exit 0; fi
+            if curl --fail --silent "$url/api/health"; then exit 0; fi
             sleep 10
           done
-          echo "La URL no respondió correctamente después del despliegue."
+          echo "::error::El Worker no respondió correctamente en $url/api/health."
           exit 1
-
-
-
-  publish-dockerhub-only:
-    name: Publicar imágenes en Docker Hub sin desplegar OCI
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/ci-site-domain'
-    needs: verify
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Descargar código
-        uses: actions/checkout@v4
-      - name: Iniciar sesión en Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Preparar Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Publicar frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.frontend
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-frontend:sha-${{ github.sha }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-frontend:latest
-      - name: Publicar backend
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.backend
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-api:sha-${{ github.sha }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/portfolio-api:latest
