@@ -21,7 +21,7 @@ variable "oci_compartment_ocid" {
 }
 variable "oci_image_ocid" {
   type        = string
-  description = "OCID Ubuntu 24.04 x86_64 de la región indicada."
+  description = "OCID de Ubuntu 24.04 ARM64/AArch64 en la región indicada."
 }
 variable "oci_ssh_public_key" {
   type      = string
@@ -35,15 +35,6 @@ variable "deployment_runner_cidr" {
   type        = string
   description = "CIDR temporal del runner GitHub que ejecuta Ansible."
 }
-variable "cloudflare_zone_id" {
-  type      = string
-  sensitive = true
-}
-variable "cloudflare_domain" {
-  type        = string
-  description = "Nombre completo DNS, por ejemplo portfolio.ejemplo.com."
-}
-
 variable "vcn_cidr" {
   type    = string
   default = "10.20.0.0/16"
@@ -54,7 +45,7 @@ variable "public_subnet_cidr" {
 }
 variable "instance_shape" {
   type    = string
-  default = "VM.Standard.E4.Flex"
+  default = "VM.Standard.A1.Flex"
 }
 variable "instance_ocpus" {
   type    = number
