@@ -124,7 +124,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-            - name: Preparar QEMU para imágenes ARM64
+      - name: Preparar QEMU para imágenes ARM64
         uses: docker/setup-qemu-action@v3
       - name: Preparar Docker Buildx
         uses: docker/setup-buildx-action@v3
