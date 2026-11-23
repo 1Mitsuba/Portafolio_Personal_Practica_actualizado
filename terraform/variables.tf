@@ -21,7 +21,7 @@ variable "oci_compartment_ocid" {
 }
 variable "oci_image_ocid" {
   type        = string
-  description = "OCID Ubuntu 24.04 x86_64 de la región indicada."
+  description = "OCID de Ubuntu 24.04 ARM64/AArch64 en la región indicada."
 }
 variable "oci_ssh_public_key" {
   type      = string
@@ -45,7 +45,7 @@ variable "public_subnet_cidr" {
 }
 variable "instance_shape" {
   type    = string
-  default = "VM.Standard.E4.Flex"
+  default = "VM.Standard.A1.Flex"
 }
 variable "instance_ocpus" {
   type    = number
