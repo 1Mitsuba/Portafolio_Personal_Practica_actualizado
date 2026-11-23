@@ -76,7 +76,7 @@ resource "oci_core_subnet" "public" {
 resource "oci_core_instance" "portfolio" {
   compartment_id      = var.oci_compartment_ocid
   availability_domain = data.oci_identity_availability_domains.available.availability_domains[0].name
-  display_name        = "portfolio-personal"
+  display_name        = "portafolio_Wendy"
   shape               = var.instance_shape
 
   shape_config {
