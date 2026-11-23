@@ -99,13 +99,3 @@ resource "oci_core_instance" "portfolio" {
 
   metadata = { ssh_authorized_keys = var.oci_ssh_public_key }
 }
-
-resource "cloudflare_dns_record" "portfolio" {
-  zone_id = var.cloudflare_zone_id
-  name    = var.cloudflare_domain
-  type    = "A"
-  content = oci_core_instance.portfolio.public_ip
-  ttl     = 1
-  proxied = true
-  comment = "Managed by GitHub Actions and Terraform"
-}
