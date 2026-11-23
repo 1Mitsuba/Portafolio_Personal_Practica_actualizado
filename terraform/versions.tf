@@ -1,8 +1,8 @@
 terraform {
-  required_version = ">= 1.10.5"
+  required_version = ">= 1.12.0"
 
-  # OCI Object Storage S3-compatible bucket; parameters are injected by GitHub Actions.
-  backend "s3" {}
+  # OCI Object Storage bucket with versioning; parameters are injected by GitHub Actions.
+  backend "oci" {}
 
   required_providers {
     oci = {
